@@ -1,0 +1,413 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<title>비주얼 노벨 엔진 (프로토타입)</title>
+<style>
+  :root{
+    --bg-deep:#161221;
+    --panel:#1f1a2e;
+    --panel-line:#3a3155;
+    --accent:#e0a458;
+    --text-main:#f2ece2;
+    --text-dim:#a79cc4;
+    --name-color:#e0a458;
+  }
+
+  *{ box-sizing:border-box; }
+
+  html,body{
+    margin:0; padding:0; height:100%;
+    background:#000;
+    font-family:'Noto Sans KR', 'Malgun Gothic', sans-serif;
+    overflow:hidden;
+  }
+
+  #game{
+    position:relative;
+    width:100vw; height:100vh;
+    max-width:960px; max-height:540px;
+    margin:auto;
+    top:50%; transform:translateY(-50%);
+    background:var(--bg-deep);
+    overflow:hidden;
+    box-shadow:0 0 60px rgba(0,0,0,.6);
+  }
+
+  /* 배경 레이어 - 지금은 이미지 없이 그라디언트 placeholder */
+  #bg-layer{
+    position:absolute; inset:0;
+    background:linear-gradient(160deg,#2b2340,#161221 70%);
+    transition:background 0.4s ease;
+  }
+
+  /* 캐릭터 레이어 - 이미지 들어올 자리 */
+  #char-layer{
+    position:absolute;
+    bottom:0; left:50%;
+    transform:translateX(-50%);
+    width:260px; height:380px;
+    display:flex; align-items:flex-end; justify-content:center;
+    transition:opacity 0.25s ease;
+  }
+  #char-layer .char-placeholder{
+    width:200px; height:340px;
+    border-radius:12px 12px 0 0;
+    background:rgba(224,164,88,0.15);
+    border:1px solid var(--panel-line);
+    display:flex; align-items:center; justify-content:center;
+    color:var(--text-dim);
+    font-size:14px;
+    text-align:center;
+    padding:12px;
+  }
+
+  /* 대사창 */
+  #dialogue-box{
+    position:absolute;
+    left:24px; right:24px; bottom:20px;
+    background:var(--panel);
+    border:1px solid var(--panel-line);
+    border-radius:10px;
+    padding:18px 22px;
+    min-height:120px;
+    cursor:pointer;
+    box-shadow:0 8px 24px rgba(0,0,0,.4);
+  }
+
+  #name-tag{
+    display:inline-block;
+    color:var(--name-color);
+    font-weight:700;
+    font-size:15px;
+    margin-bottom:8px;
+    letter-spacing:0.02em;
+  }
+
+  #dialogue-text{
+    color:var(--text-main);
+    font-size:16px;
+    line-height:1.6;
+    min-height:56px;
+    white-space:pre-wrap;
+  }
+
+  #next-indicator{
+    position:absolute;
+    right:18px; bottom:14px;
+    color:var(--text-dim);
+    font-size:12px;
+    animation:blink 1.2s infinite;
+  }
+  @keyframes blink{ 50%{ opacity:0.2; } }
+
+  /* 선택지 */
+  #choice-layer{
+    position:absolute;
+    inset:0;
+    display:none;
+    flex-direction:column;
+    align-items:center;
+    justify-content:center;
+    gap:12px;
+    background:rgba(10,8,16,0.55);
+    backdrop-filter:blur(2px);
+  }
+  #choice-layer.active{ display:flex; }
+
+  .choice-btn{
+    background:var(--panel);
+    border:1px solid var(--accent);
+    color:var(--text-main);
+    padding:12px 26px;
+    border-radius:8px;
+    font-size:15px;
+    cursor:pointer;
+    min-width:280px;
+    transition:background 0.15s ease, transform 0.1s ease;
+  }
+  .choice-btn:hover{
+    background:rgba(224,164,88,0.15);
+    transform:translateY(-1px);
+  }
+
+  /* 상단 툴바 (세이브/로드는 다음 단계에서 채울 자리) */
+  #toolbar{
+    position:absolute;
+    top:10px; right:14px;
+    display:flex; gap:8px;
+    z-index:5;
+  }
+  #toolbar button{
+    background:rgba(0,0,0,0.35);
+    border:1px solid var(--panel-line);
+    color:var(--text-dim);
+    font-size:12px;
+    padding:5px 10px;
+    border-radius:6px;
+    cursor:pointer;
+  }
+  #toolbar button:hover{ color:var(--text-main); }
+</style>
+</head>
+<body>
+
+<div id="game">
+  <div id="bg-layer"></div>
+
+  <div id="char-layer">
+    <div class="char-placeholder" id="char-placeholder">캐릭터 이미지 자리<br>(나중에 교체)</div>
+  </div>
+
+  <div id="toolbar">
+    <button id="btn-auto">오토</button>
+    <button id="btn-save">세이브</button>
+    <button id="btn-load">로드</button>
+  </div>
+
+  <div id="dialogue-box">
+    <div id="name-tag"></div>
+    <div id="dialogue-text"></div>
+    <div id="next-indicator">▼ 클릭하여 계속</div>
+  </div>
+
+  <div id="choice-layer"></div>
+</div>
+
+<script>
+/* ============================================================
+   1. 스크립트 데이터 구조
+   - id: 씬 내 줄 고유 식별자 (분기/저장 시 사용)
+   - speaker: 화자 이름 (없으면 나레이션)
+   - text: 대사 내용
+   - bg: 배경 식별자 (지금은 색상 코드나 이름, 나중에 이미지 경로로 교체)
+   - char: 등장 캐릭터 이름 (없으면 캐릭터 숨김)
+   - choices: 선택지 배열 [{ text, next, onSelect }]
+   - next: 다음으로 이동할 id (없으면 자동으로 다음 줄)
+   ============================================================ */
+
+const script = [
+  {
+    id: "start_1",
+    speaker: null,
+    text: "조용한 교실, 창밖으로 노을이 진다.",
+    bg: "classroom_sunset"
+  },
+  {
+    id: "start_2",
+    speaker: "???",
+    text: "...아직도 남아있었네.",
+    char: "mystery_girl"
+  },
+  {
+    id: "start_3",
+    speaker: "나",
+    text: "어, 미안. 정리하다가 시간 가는 줄 몰랐어.",
+    char: "mystery_girl"
+  },
+  {
+    id: "choice_1",
+    speaker: null,
+    text: "그녀가 잠시 나를 바라본다.",
+    char: "mystery_girl",
+    choices: [
+      { text: "무슨 일이야?", flag: "path_curious", next: "path_curious_1" },
+      { text: "먼저 갈게.", flag: "path_leave", next: "path_leave_1" }
+    ]
+  },
+  {
+    id: "path_curious_1",
+    speaker: "???",
+    text: "그냥... 너한테 할 말이 있었어.",
+    char: "mystery_girl",
+    next: "end_demo"
+  },
+  {
+    id: "path_leave_1",
+    speaker: "???",
+    text: "아... 그래, 그럼 다음에 얘기하자.",
+    char: "mystery_girl",
+    next: "end_demo"
+  },
+  {
+    id: "end_demo",
+    speaker: null,
+    text: "(데모 종료 - 여기서부터 다음 씬 연결 예정)"
+  }
+];
+
+/* ============================================================
+   2. 게임 상태
+   ============================================================ */
+const state = {
+  currentId: script[0].id,
+  flags: {},        // 선택지에 따른 분기/호감도 등 저장
+  history: []        // 지나온 id 기록 (되돌리기/로그용, 지금은 뼈대만)
+};
+
+/* ============================================================
+   3. DOM 참조
+   ============================================================ */
+const nameTag = document.getElementById("name-tag");
+const dialogueText = document.getElementById("dialogue-text");
+const dialogueBox = document.getElementById("dialogue-box");
+const bgLayer = document.getElementById("bg-layer");
+const charLayer = document.getElementById("char-layer");
+const charPlaceholder = document.getElementById("char-placeholder");
+const choiceLayer = document.getElementById("choice-layer");
+const nextIndicator = document.getElementById("next-indicator");
+
+/* ============================================================
+   4. 핵심 함수
+   ============================================================ */
+
+function findLineById(id){
+  return script.find(line => line.id === id);
+}
+
+function renderLine(line){
+  // 이름
+  nameTag.textContent = line.speaker || "";
+  nameTag.style.display = line.speaker ? "inline-block" : "none";
+
+  // 배경 (지금은 이름만 표시하는 placeholder 처리, 나중에 이미지/색상 매핑)
+  if(line.bg){
+    bgLayer.style.background =
+      "linear-gradient(160deg, #2b2340, #161221 70%)"; // TODO: bg별 실제 이미지/색 매핑
+  }
+
+  // 캐릭터
+  if(line.char){
+    charLayer.style.opacity = 1;
+    charPlaceholder.textContent = line.char + "\n(이미지 자리)";
+  } else {
+    charLayer.style.opacity = 0;
+  }
+
+  // 대사 타이핑 효과
+  typeText(line.text);
+
+  // 선택지 처리
+  if(line.choices && line.choices.length > 0){
+    showChoices(line.choices);
+    nextIndicator.style.display = "none";
+  } else {
+    hideChoices();
+    nextIndicator.style.display = "block";
+  }
+}
+
+let typing = false;
+let typeTimer = null;
+
+function typeText(text){
+  clearInterval(typeTimer);
+  dialogueText.textContent = "";
+  typing = true;
+  let i = 0;
+  typeTimer = setInterval(() => {
+    dialogueText.textContent += text[i];
+    i++;
+    if(i >= text.length){
+      clearInterval(typeTimer);
+      typing = false;
+    }
+  }, 25);
+}
+
+function skipTyping(){
+  clearInterval(typeTimer);
+  const line = findLineById(state.currentId);
+  dialogueText.textContent = line.text;
+  typing = false;
+}
+
+function showChoices(choices){
+  choiceLayer.innerHTML = "";
+  choices.forEach(choice => {
+    const btn = document.createElement("button");
+    btn.className = "choice-btn";
+    btn.textContent = choice.text;
+    btn.addEventListener("click", () => selectChoice(choice));
+    choiceLayer.appendChild(btn);
+  });
+  choiceLayer.classList.add("active");
+}
+
+function hideChoices(){
+  choiceLayer.classList.remove("active");
+  choiceLayer.innerHTML = "";
+}
+
+function selectChoice(choice){
+  if(choice.flag){
+    state.flags[choice.flag] = true; // 선택 기록 (호감도 등으로 확장 가능)
+  }
+  hideChoices();
+  goToLine(choice.next);
+}
+
+function goToLine(id){
+  state.history.push(state.currentId);
+  state.currentId = id;
+  renderLine(findLineById(id));
+}
+
+function advance(){
+  const line = findLineById(state.currentId);
+
+  // 타이핑 중이면 즉시 완성
+  if(typing){
+    skipTyping();
+    return;
+  }
+
+  // 선택지가 떠 있으면 클릭으로 넘어가지 않음
+  if(line.choices && line.choices.length > 0){
+    return;
+  }
+
+  // 다음 줄 결정: next가 지정돼 있으면 그쪽으로, 없으면 배열상 다음 줄
+  if(line.next){
+    goToLine(line.next);
+  } else {
+    const idx = script.findIndex(l => l.id === state.currentId);
+    if(idx >= 0 && idx + 1 < script.length){
+      goToLine(script[idx + 1].id);
+    } else {
+      dialogueText.textContent = "(대사 끝)";
+    }
+  }
+}
+
+/* ============================================================
+   5. 이벤트 연결
+   ============================================================ */
+dialogueBox.addEventListener("click", advance);
+
+document.addEventListener("keydown", (e) => {
+  if(e.code === "Space" || e.code === "Enter"){
+    e.preventDefault();
+    advance();
+  }
+});
+
+// 세이브/로드/오토는 다음 단계에서 채울 자리 (지금은 자리만)
+document.getElementById("btn-auto").addEventListener("click", () => {
+  alert("오토 기능은 다음 단계에서 구현 예정입니다.");
+});
+document.getElementById("btn-save").addEventListener("click", () => {
+  alert("세이브 기능은 다음 단계에서 구현 예정입니다.");
+});
+document.getElementById("btn-load").addEventListener("click", () => {
+  alert("로드 기능은 다음 단계에서 구현 예정입니다.");
+});
+
+/* ============================================================
+   6. 시작
+   ============================================================ */
+renderLine(findLineById(state.currentId));
+
+</script>
+</body>
+</html>
